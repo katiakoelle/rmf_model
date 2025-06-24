@@ -1,0 +1,439 @@
+---
+title: "Immune Pressure is Key to Understanding Observed Patterns of Respiratory Virus Evolution in Prolonged Infections"
+author: "Amber Coats, Rita Wang, and Katia Koelle"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{H3N2}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+---
+
+```{r}
+# Required Packages
+
+library(ggplot2)
+library(tidyverse)
+library(ape)
+library(ggtree)
+library(treeio)
+library(treedater)
+
+```
+
+```{r}
+
+# Functions Needed to Generate A Time Aligned Neighbor Joining Tree 
+#10 samples collected at day 0 and every 30 days through 1 year
+
+get_pairwise_dist_matrix <- function(genotypeVector, genotypesPresent) {
+
+genotypes <- genotypeVector[genotypesPresent,]
+
+genotype1 <- c()
+genotype2 <- c()
+pairwise_dist <- c()
+
+matrix <- matrix(nrow=nrow(genotypes), ncol=nrow(genotypes))
+
+
+for (i in 1:nrow(matrix)) {
+  for (j in 1:ncol(matrix)) {
+    dist <- sum(genotypes[i,] != genotypes[j,])
+    matrix[i,j] <- dist
+
+  }
+}
+
+matrix_df <- as.data.frame(matrix)
+
+return(matrix)
+}
+
+
+
+get_nj_tree_samples <- function(start, end, genotypeVector, nListByGenotype) {
+  
+time_sampled <- seq(start, end, by = 30)
+time_index <- c()
+for (i in 1:length(time_sampled)) {
+time_index[i] <- which(round(time, digits=0) == time_sampled[i])
+}
+
+
+number_of_samples <- 10
+genotypes_for_nj <- c()
+
+for (i in 1:length(time_index)) {
+  
+  if(time_index[i] != 1) {
+    
+    genotypesPresent <- which(nListByGenotype[ ,time_index[i]] != 0)
+    sampled_genotypes <- sample(genotypesPresent, number_of_samples, prob=genotypesPresent/params.N)
+    
+    genotypes_for_nj <- c(genotypes_for_nj, sampled_genotypes)
+    
+    if (i == length(time_index)) {
+      final_samples <- sampled_genotypes
+    }
+  } else {
+    genotypesPresent <- which(nListByGenotype[ ,time_index[i]] != 0)
+    sampled_genotypes <- sample(genotypesPresent, number_of_samples, prob=genotypesPresent/params.N, replace=TRUE)
+    genotypes_for_nj <- c(genotypes_for_nj, sampled_genotypes)
+  }
+  
+  }
+return(list(genotypes_sampled=genotypes_for_nj, final_samples=final_samples))
+}
+
+
+
+
+Get_NJ_tree <- function(genotypeVector, genotypes_sampled) {
+  
+to_plot <- get_pairwise_dist_matrix(genotypeVector, genotypes_sampled)
+dimnames(to_plot) <- list(c("outgroup", 1:(length(genotypes_sampled)-1)), c("outgroup", 1:(length(genotypes_sampled)-1)))
+
+tree <- nj(to_plot)
+    # Example: Rooting the tree using the tip with name "outgroup" as the outgroup
+    rooted_tree <- root(tree, outgroup = "outgroup", resolve.root = TRUE)
+    
+    return(rooted_tree)
+}
+
+
+
+get_NJ_no_outgroup <- function() {
+  
+NJ_samples <- get_nj_tree_samples(0,365, genotypeVector, nListByGenotype)
+outgroup <- matrix(c(genotypeVector[1, ], rep(0, 20)), ncol=length(c(genotypeVector[1, ], rep(0, 20))), nrow=1)
+
+genotypesSampled <- genotypeVector[NJ_samples[[1]], ]
+added_nt <- matrix(1, ncol=20, nrow=nrow(genotypesSampled))
+genotypesSampled <- cbind(genotypesSampled, added_nt)
+genotypesSampled <- rbind(outgroup, genotypesSampled)
+
+nj_tree <- Get_NJ_tree(genotypesSampled, c(1:(nrow(genotypesSampled))))
+plot(nj_tree)
+
+tree_no_outgroup <- drop.tip(nj_tree, "outgroup")
+plot(tree_no_outgroup)
+
+return(tree_no_outgroup)
+}
+
+
+
+
+
+# ------------------- Using the above... A NJ tree can be generated, time aligned, and saved by: ----------------------------------------------
+
+tree2 <- get_NJ_no_outgroup()
+write.tree(tree2, file="NJ_tree.txt")
+
+times_sampled <- c(rep(seq(0,365, by =30), each=10))
+names(times_sampled) <- c(1:length(times_sampled))
+
+
+time_tree <- dater(tree2, times_sampled, params.L_total, temporalConstraints=TRUE)
+write.tree(time_tree, file="time_tree.txt")
+
+
+
+
+
+```
+
+
+```{r}
+# ------------------ To calculate the number of synonymous and nonsynonymous substitution over time use the following -------------------------
+
+# calculate the consensus sequence at each time point
+CalculateConsensusOverTime <- function(genotypes, curr_N_by_genotype) {
+  
+  n_timePts <- ncol(nListByGenotype)
+  
+  consensusVector <- matrix(nrow=n_timePts, ncol=params.L_total)
+  
+  for (i in 1:n_timePts) {
+    
+  sumBySite <- colSums(nListByGenotype[, i]*genotypes)
+  fractionBySite <- sumBySite/params.N
+  new_consensus_genotype <- round(fractionBySite)
+  
+  consensusVector[i, ] <- new_consensus_genotype
+  
+  }
+  
+  return(consensusVector)
+}
+
+# calculate the number of Nonsynonymous substitutions that occurred at the consensus level at each time point relative to the initial starting genotype
+GetNSynSubstitutionPerTimeData <- function() {
+  
+  n_timePts <- ncol(nListByGenotype)
+  
+  subs_per_site <- c()
+  
+  for (i in 1:n_timePts) {
+    subs <- sum(params$initial_genotype[1:(params.L_P+params.L_PA+params.L_A)] != consensusVector[i, ][1:(params.L_P+params.L_PA+params.L_A)])
+    
+    subs_per_site[i] <- subs/(params.L_P+params.L_PA+params.L_A)
+    
+  }
+  
+  return(subs_per_site)
+  
+  return(divergence)
+}
+
+# calculate the number of Synonymous substitutions that occurred at the consensus level at each time point relative to the initial starting genotype
+GetSynSubstitutionPerTimeData <- function() {
+  
+  n_timePts <- ncol(nListByGenotype)
+  
+  subs_per_site <- c()
+  
+  divergence <- numeric(n_timePts) 
+  dist <- c()
+  for (i in 1:n_timePts) {
+    subs <- sum(params$initial_genotype[(params.L_P+params.L_PA+params.L_A+1):params.L_total] != consensusVector[i, ][(params.L_P+params.L_PA+params.L_A+1):params.L_total])
+    subs_per_site[i] <- subs/params.L_S
+    
+  }
+  
+  return(subs_per_site)
+}
+
+
+
+```
+
+```{r}
+# ---------------------- For Calculating the Number of shared substitution above threshold at final time point ---------------
+
+n_reps <- 6 #Number of Replicates
+
+GetConsensus <- function(nListByGenotype, genotypeVector) {
+ 
+  effN <- sum(nListByGenotype)
+  this_L <- ncol(genotypeVector)
+  
+  consensus_time_start <- c()
+
+for (i in 1:this_L) {
+    p_ones <- sum(nListByGenotype*genotypeVector[,i])/effN
+  
+    if (p_ones > 0.5) {
+      consensus_time_start[i] <- 1
+    } else {
+      consensus_time_start[i] <- 0
+  }
+} 
+  
+  return(consensus_time_start)
+}
+
+GetListOfSitesAboveThreshold <- function(consensus_start, nListByGenotype, genotypeVector,threshold, locs) {
+ 
+  effN <- sum(nListByGenotype)
+  this_L <- length(locs)
+  n_genotypes <- nrow(genotypeVector)
+  
+  site_list <- c()
+
+for (i in 1:this_L) {
+  bit_val <- consensus_start[locs][i]
+    p_ones <- sum(nListByGenotype*genotypeVector[,i])/effN
+    
+    if (bit_val == 0) {
+      
+      if (p_ones > threshold) {
+        site_list <- c(site_list, locs[i])
+      }
+      
+    }  else if (bit_val == 1) {
+      p_zeros <- 1-p_ones
+      
+      if(p_zeros > threshold) {
+      site_list <- c(site_list, locs[i])
+    } 
+    }
+    
+}
+  
+  return(site_list)
+}
+
+
+GetSharedSubsOverThresholdData <- function(nListByGenotypes_byReps, genotypeVector_byReps, n_reps) {
+  
+cross_results.number_subs_shared <- matrix(NA, ncol=(n_reps), nrow=(n_reps))
+
+cntr = 0
+
+for (rep1 in 1:n_reps) {
+  consensus_time_start_rep_first <- GetConsensus(nListByGenotypes_byReps[[rep1]][ ,1], genotypeVector_byReps[[rep1]])
+  subs_present_end_rep1 <- GetListOfSitesAboveThreshold(consensus_time_start_rep_first, nListByGenotypes_byReps[[rep1]][ ,ncol(nListByGenotypes_byReps[[rep1]])], genotypeVector_byReps[[rep1]], threshold, locs)
+  
+ 
+  
+  for (rep2 in rep1:n_reps) {
+      consensus_time_start_rep_second <- GetConsensus(nListByGenotypes_byReps[[rep2]][ ,1], genotypeVector_byReps[[rep2]])
+  subs_present_end_rep2 <- GetListOfSitesAboveThreshold(consensus_time_start_rep_second, nListByGenotypes_byReps[[rep2]][ ,ncol(nListByGenotypes_byReps[[rep2]])], genotypeVector_byReps[[rep2]], threshold, locs)
+  
+
+  cross_results.number_subs_shared[rep2,rep1] <- length(intersect(subs_present_end_rep1, subs_present_end_rep2))
+  cross_results.number_subs_shared[rep1,rep2] <- cross_results.number_subs_shared[rep2,rep1]
+   }
+}
+
+colnames(cross_results.number_subs_shared) <- c(1:n_reps)
+rownamescross_results.number_subs_shared <- c(1:n_reps)
+
+long_data.cross_results.number_subs_shared <- melt(cross_results.number_subs_shared)
+
+df <- data.frame(number_subs_shared=long_data.cross_results.number_subs_shared$value, sim1=long_data.cross_results.number_subs_shared$Var1, sim2=long_data.cross_results.number_subs_shared$Var2)
+
+return(df)
+}
+
+
+
+
+GetSharedSubsData <- function(nListByGenotypes_byReps, genotypeVector_byReps, n_reps) {
+  
+cross_results.number_subs_shared <- matrix(NA, ncol=(n_reps), nrow=(n_reps))
+cross_results.number_subs_total <- matrix(NA, ncol=(n_reps), nrow=(n_reps))
+
+  
+cntr = 0
+
+for (rep1 in 1:n_reps) {
+  consensus_time_start_rep1 <- GetConsensus(nListByGenotypes_byReps[[rep1]][ ,1], genotypeVector_byReps[[rep1]])
+  consensus_time_end_rep1 <- GetConsensus(nListByGenotypes_byReps[[rep1]][ ,ncol(nListByGenotypes_byReps[[rep1]])], genotypeVector_byReps[[rep1]])
+  
+  
+  locs <- 1:(params.L_P+params.L_PA+params.L_A)
+  #locs <- 1:params.L_total
+    
+  n_substitutions_site_rep1 <- abs(consensus_time_start_rep1[locs] - consensus_time_end_rep1[locs])
+  n_substitutions_rep1 <- sum(n_substitutions_site_rep1)
+  
+  
+  for (rep2 in rep1:n_reps) {
+      consensus_time_start_rep2 <- GetConsensus(nListByGenotypes_byReps[[rep2]][ ,1], genotypeVector_byReps[[rep2]])
+  consensus_time_end_rep2 <- GetConsensus(nListByGenotypes_byReps[[rep2]][ ,ncol(nListByGenotypes_byReps[[rep2]])], genotypeVector_byReps[[rep2]])
+  
+  n_substitutions_site_rep2 <- abs(consensus_time_start_rep2[locs] - consensus_time_end_rep2[locs])
+  n_substitutions_rep2 <- sum(n_substitutions_site_rep2)
+  
+  
+  #appending results to matrices 
+  
+  cross_results.number_subs_shared[rep2,rep1] <- length(intersect(which(n_substitutions_site_rep1 == 1), which(n_substitutions_site_rep2 == 1)))
+  cross_results.number_subs_shared[rep1,rep2] <- cross_results.number_subs_shared[rep2,rep1]
+  cross_results.number_subs_total[rep2,rep1] <- length(union(which(n_substitutions_site_rep1 == 1), which(n_substitutions_site_rep2 == 1)))
+  cross_results.number_subs_total[rep1,rep2] <- cross_results.number_subs_total[rep2,rep1]
+  }
+}
+
+cross_results.fraction_shared <- cross_results.number_subs_shared/cross_results.number_subs_total
+
+colnames(cross_results.number_subs_shared) <- c(1:n_reps)
+rownamescross_results.number_subs_shared <- c(1:n_reps)
+colnames(cross_results.number_subs_total) <- c(1:n_reps)
+rownames(cross_results.number_subs_total) <- c(1:n_reps)
+colnames(cross_results.fraction_shared) <- c(1:n_reps)
+rownames(cross_results.fraction_shared) <- c(1:n_reps) 
+
+long_data.cross_results.number_subs_shared <- melt(cross_results.number_subs_shared)
+long_data.cross_results.number_subs_total <- melt(cross_results.number_subs_total)
+long_data.cross_results.fraction_shared <- melt(cross_results.fraction_shared)
+
+df <- data.frame(number_subs_shared=long_data.cross_results.number_subs_shared$value, number_subs_total=long_data.cross_results.number_subs_total$value, fraction_shared=long_data.cross_results.fraction_shared$value, sim1=long_data.cross_results.number_subs_shared$Var1, sim2=long_data.cross_results.number_subs_shared$Var2)
+
+return(df)
+}
+
+```
+
+
+```{r}
+# -------------------- To calculate the number of shared substitutions that were above the threshold at any point in the simulation -----------------
+
+n_reps <- 6 #Number of Replicates
+
+GetSharedSubsOverThresholdData_Total <- function(nListByGenotypes_byReps, genotypeVector_byReps, n_reps) {
+  
+cross_results.number_subs_shared <- matrix(NA, ncol=(n_reps), nrow=(n_reps))
+
+cntr = 0
+
+for (rep1 in 1:n_reps) {
+  consensus_time_start_rep_first <- GetConsensus(nListByGenotypes_byReps[[rep1]][ ,1], genotypeVector_byReps[[rep1]])
+  subs_present_end_rep1 <- GetListOfSitesAboveThreshold_Total(consensus_time_start_rep_first, nListByGenotypes_byReps[[rep1]], genotypeVector_byReps[[rep1]], threshold, locs)
+  
+ 
+  
+  for (rep2 in rep1:n_reps) {
+      consensus_time_start_rep_second <- GetConsensus(nListByGenotypes_byReps[[rep2]][ ,1], genotypeVector_byReps[[rep2]])
+  subs_present_end_rep2 <- GetListOfSitesAboveThreshold_Total(consensus_time_start_rep_second, nListByGenotypes_byReps[[rep2]], genotypeVector_byReps[[rep2]], threshold, locs)
+  
+
+  cross_results.number_subs_shared[rep2,rep1] <- length(intersect(subs_present_end_rep1, subs_present_end_rep2))
+  cross_results.number_subs_shared[rep1,rep2] <- cross_results.number_subs_shared[rep2,rep1]
+   }
+}
+
+colnames(cross_results.number_subs_shared) <- c(1:n_reps)
+rownamescross_results.number_subs_shared <- c(1:n_reps)
+
+long_data.cross_results.number_subs_shared <- melt(cross_results.number_subs_shared)
+
+df <- data.frame(number_subs_shared=long_data.cross_results.number_subs_shared$value, sim1=long_data.cross_results.number_subs_shared$Var1, sim2=long_data.cross_results.number_subs_shared$Var2)
+
+return(df)
+}
+
+GetListOfSitesAboveThreshold_Total <- function(consensus_start, nListByGenotype, genotypeVector, threshold, locs) {
+ 
+  effN <- colSums(nListByGenotype) 
+  this_L <- length(locs)
+  n_genotypes <- nrow(genotypeVector)
+  
+  total_sites_above_threshold <- c()
+  site_list <- c()
+
+  for (t in 1:ncol(nListByGenotype)) {
+    genotypeList <- nListByGenotype[,t]
+  
+for (i in 1:this_L) {
+  bit_val <- consensus_start[locs][i]
+    p_ones <- sum(genotypeList*genotypeVector[,i])/effN[t]
+    
+    if (bit_val == 0) {
+      
+      if (p_ones > threshold) {
+        site_list <- c(site_list, locs[i]) 
+      }
+      
+    }  else if (bit_val == 1) {
+      p_zeros <- 1-p_ones
+      
+      if(p_zeros > threshold) {
+      site_list <- c(site_list, locs[i])
+    } 
+    }
+    
+}
+    total_sites_above_threshold <- c(total_sites_above_threshold, site_list)
+  }
+  
+  unqiue_site_list <- unique(total_sites_above_threshold)
+  
+  return(unqiue_site_list)
+}
+```
+
